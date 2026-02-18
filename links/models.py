@@ -35,6 +35,7 @@ class NegativeLink(models.Model):
         ('removed', 'Removed'),
         ('in_work', 'In Work'),
         ('pending', 'Pending'),
+        ('cancelled', 'Cancelled'),
     ]
     
     PRIORITY_CHOICES = [
@@ -92,11 +93,13 @@ class NegativeLink(models.Model):
         help_text='Priority level for handling this link'
     )
     
-    manager = models.CharField(
-        max_length=100,
+    manager = models.ForeignKey(
+        'managers.Manager',
         null=True,
         blank=True,
-        help_text='Manager assigned to handle this link'
+        on_delete=models.SET_NULL,
+        related_name='negative_links',
+        help_text='Manager assigned to handle this link',
     )
     
     notes = models.TextField(

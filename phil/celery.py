@@ -17,4 +17,8 @@ app.conf.beat_schedule = {
         'task': 'links.tasks.check_urls_availability',
         'schedule': crontab(hour='*/24'),  # Every 24 hours by default
     },
+    'activity-cleanup-old-logs': {
+        'task': 'activity.tasks.cleanup_old_activity_logs',
+        'schedule': crontab(hour=3, minute=0),  # Daily at 03:00
+    },
 }

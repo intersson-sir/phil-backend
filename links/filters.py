@@ -30,9 +30,9 @@ class NegativeLinkFilter(django_filters.FilterSet):
         lookup_expr='exact'
     )
     
-    manager = django_filters.CharFilter(
-        field_name='manager',
-        lookup_expr='exact'
+    manager_id = django_filters.UUIDFilter(
+        field_name='manager_id',
+        lookup_expr='exact',
     )
     
     dateFrom = django_filters.DateTimeFilter(
@@ -54,7 +54,7 @@ class NegativeLinkFilter(django_filters.FilterSet):
     
     class Meta:
         model = NegativeLink
-        fields = ['platform', 'status', 'priority', 'manager', 'dateFrom', 'dateTo', 'search']
+        fields = ['platform', 'status', 'priority', 'manager_id', 'dateFrom', 'dateTo', 'search']
     
     def filter_search(self, queryset, name, value):
         """

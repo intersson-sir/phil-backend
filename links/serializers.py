@@ -5,12 +5,22 @@ from rest_framework import serializers
 from .models import NegativeLink
 
 
+class ManagerInlineSerializer(serializers.Serializer):
+    """Minimal manager representation for link responses."""
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(read_only=True)
+    email = serializers.EmailField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+
+
 class NegativeLinkSerializer(serializers.ModelSerializer):
     """
     Serializer for NegativeLink model.
-    Handles conversion between NegativeLink instances and JSON.
+    manager is returned as full object; accept manager_id (UUID) on write.
     """
-    
+    manager = ManagerInlineSerializer(read_only=True, allow_null=True)
+    manager_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+
     class Meta:
         model = NegativeLink
         fields = [
@@ -23,6 +33,7 @@ class NegativeLinkSerializer(serializers.ModelSerializer):
             'removed_at',
             'priority',
             'manager',
+            'manager_id',
             'notes',
             'created_at',
             'updated_at',
@@ -36,12 +47,31 @@ class NegativeLinkSerializer(serializers.ModelSerializer):
         if not value or not value.strip():
             raise serializers.ValidationError("URL cannot be empty.")
         return value.strip()
-    
+
+    def validate_manager_id(self, value):
+        if value is None:
+            return value
+        from managers.models import Manager
+        if not Manager.objects.filter(id=value, is_active=True).exists():
+            raise serializers.ValidationError("Manager not found or inactive.")
+        return value
+
+    def create(self, validated_data):
+        manager_id = validated_data.pop('manager_id', None)
+        if manager_id is not None:
+            from managers.models import Manager
+            validated_data['manager'] = Manager.objects.filter(id=manager_id).first()
+        return super().create(validated_data)
+
     def update(self, instance, validated_data):
         """
         Update instance with special handling for status changes.
         When status changes to 'removed', removed_at is set automatically in the model.
         """
+        manager_id = validated_data.pop('manager_id', None)
+        if manager_id is not None:
+            from managers.models import Manager
+            validated_data['manager'] = Manager.objects.filter(id=manager_id).first()
         return super().update(instance, validated_data)
 
 
@@ -69,25 +99,24 @@ class BulkUpdateStatusSerializer(serializers.Serializer):
 class BulkAssignManagerSerializer(serializers.Serializer):
     """
     Serializer for bulk manager assignment operation.
+    manager_id: UUID of the Manager to assign.
     """
     ids = serializers.ListField(
         child=serializers.UUIDField(),
         min_length=1,
         help_text="List of link IDs to update"
     )
-    manager = serializers.CharField(
-        max_length=100,
-        help_text="Manager name to assign"
-    )
-    
+    manager_id = serializers.UUIDField(help_text="Manager UUID to assign")
+
     def validate_ids(self, value):
         """Validate that all IDs exist."""
         if not value:
             raise serializers.ValidationError("At least one ID is required.")
         return value
-    
-    def validate_manager(self, value):
-        """Validate manager name."""
-        if not value or not value.strip():
-            raise serializers.ValidationError("Manager name cannot be empty.")
-        return value.strip()
+
+    def validate_manager_id(self, value):
+        """Validate that Manager exists and is active."""
+        from managers.models import Manager
+        if not Manager.objects.filter(id=value, is_active=True).exists():
+            raise serializers.ValidationError("Manager not found or inactive.")
+        return value

@@ -4,179 +4,204 @@ Views for the stats app.
 import logging
 from datetime import timedelta
 from django.utils import timezone
-from django.db.models import Count, Q
+from django.db.models import Count
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from django.core.cache import cache
 
 from links.models import NegativeLink
 
 logger = logging.getLogger(__name__)
 
+# period query param: 1d, 7d, 30d (default 30d)
+PERIOD_DAYS = {'1d': 1, '7d': 7, '30d': 30}
+DEFAULT_PERIOD = '30d'
 
-class DashboardStatsView(APIView):
-    """
-    API view for dashboard statistics.
-    
-    GET /api/stats/dashboard/
-    
-    Returns overall statistics including:
-    - Total counts by status
-    - New/removed counts for last 7 days
-    - Platform-specific statistics
-    - Activity chart for last 30 days
-    """
-    
-    def get(self, request):
-        """
-        Get dashboard statistics with caching.
-        """
-        # Try to get from cache first
-        cache_key = 'dashboard_stats'
-        cached_data = cache.get(cache_key)
-        
-        if cached_data:
-            logger.info("Returning cached dashboard stats")
-            return Response(cached_data)
-        
-        logger.info("Calculating dashboard stats")
-        
-        # Calculate date ranges
-        now = timezone.now()
-        seven_days_ago = now - timedelta(days=7)
-        thirty_days_ago = now - timedelta(days=30)
-        
-        # Overall statistics
-        total = NegativeLink.objects.count()
-        active = NegativeLink.objects.filter(status='active').count()
-        removed = NegativeLink.objects.filter(status='removed').count()
-        in_work = NegativeLink.objects.filter(status='in_work').count()
-        pending = NegativeLink.objects.filter(status='pending').count()
-        
-        # Last 7 days statistics
-        new_last_7_days = NegativeLink.objects.filter(
-            detected_at__gte=seven_days_ago
+
+def parse_period(period_value):
+    """Return (period_key, days). If invalid, return default."""
+    if not period_value or period_value not in PERIOD_DAYS:
+        return DEFAULT_PERIOD, PERIOD_DAYS[DEFAULT_PERIOD]
+    return period_value, PERIOD_DAYS[period_value]
+
+
+def get_period_range(days):
+    """Return (start_datetime, end_datetime) for the last `days` days (filter by detected_at)."""
+    now = timezone.now()
+    start = now - timedelta(days=days)
+    return start, now
+
+
+def build_dashboard_stats(period_key, days):
+    """Build dashboard stats for the given period. Uses ORM aggregation where possible."""
+    start, end = get_period_range(days)
+    base_qs = NegativeLink.objects.filter(detected_at__gte=start, detected_at__lte=end)
+
+    # Total and by status (aggregation)
+    total = base_qs.count()
+    status_breakdown = dict(
+        base_qs.values('status').annotate(count=Count('id')).values_list('status', 'count')
+    )
+    active = status_breakdown.get('active', 0)
+    removed = status_breakdown.get('removed', 0)
+    in_work = status_breakdown.get('in_work', 0)
+    pending = status_breakdown.get('pending', 0)
+    cancelled = status_breakdown.get('cancelled', 0)
+
+    # By platform (aggregation)
+    platforms_data = []
+    for platform_code, platform_name in NegativeLink.PLATFORM_CHOICES:
+        platform_qs = base_qs.filter(platform=platform_code)
+        platform_stats = {
+            'platform': platform_code,
+            'total': platform_qs.count(),
+            'active': platform_qs.filter(status='active').count(),
+            'removed': platform_qs.filter(status='removed').count(),
+            'in_work': platform_qs.filter(status='in_work').count(),
+            'pending': platform_qs.filter(status='pending').count(),
+            'cancelled': platform_qs.filter(status='cancelled').count(),
+        }
+        platforms_data.append(platform_stats)
+
+    # By priority (aggregation)
+    priority_breakdown = []
+    for priority_code, _ in NegativeLink.PRIORITY_CHOICES:
+        cnt = base_qs.filter(priority=priority_code).count()
+        priority_breakdown.append({'priority': priority_code, 'count': cnt})
+
+    # Removed within period (removed_at in range)
+    removed_in_period = NegativeLink.objects.filter(
+        removed_at__gte=start,
+        removed_at__lte=end,
+    ).count()
+
+    # Activity chart by day (within period)
+    activity_chart = []
+    current_date = start.date()
+    end_date = end.date()
+    while current_date <= end_date:
+        next_date = current_date + timedelta(days=1)
+        active_count = base_qs.filter(detected_at__date=current_date, status='active').count()
+        removed_count = NegativeLink.objects.filter(
+            removed_at__date=current_date,
+            detected_at__gte=start,
+            detected_at__lte=end,
         ).count()
-        
-        removed_last_7_days = NegativeLink.objects.filter(
-            removed_at__gte=seven_days_ago,
-            removed_at__isnull=False
-        ).count()
-        
-        # Platform statistics
-        platforms_data = []
-        for platform_code, platform_name in NegativeLink.PLATFORM_CHOICES:
-            platform_links = NegativeLink.objects.filter(platform=platform_code)
-            
-            platform_stats = {
-                'platform': platform_code,
-                'total': platform_links.count(),
-                'active': platform_links.filter(status='active').count(),
-                'removed': platform_links.filter(status='removed').count(),
-                'in_work': platform_links.filter(status='in_work').count(),
-                'new_last_7_days': platform_links.filter(
-                    detected_at__gte=seven_days_ago
-                ).count()
-            }
-            
-            platforms_data.append(platform_stats)
-        
-        # Activity chart - last 30 days
-        activity_chart = []
-        current_date = thirty_days_ago.date()
-        end_date = now.date()
-        
-        while current_date <= end_date:
-            next_date = current_date + timedelta(days=1)
-            
-            active_count = NegativeLink.objects.filter(
-                detected_at__date=current_date,
-                status='active'
-            ).count()
-            
-            removed_count = NegativeLink.objects.filter(
-                removed_at__date=current_date
-            ).count()
-            
-            activity_chart.append({
-                'date': current_date.isoformat(),
-                'active': active_count,
-                'removed': removed_count
-            })
-            
-            current_date = next_date
-        
-        # Build response
-        response_data = {
-            'total': total,
+        activity_chart.append({
+            'date': current_date.isoformat(),
+            'active': active_count,
+            'removed': removed_count,
+        })
+        current_date = next_date
+
+    return {
+        'period': period_key,
+        'total': total,
+        'active': active,
+        'removed': removed,
+        'in_work': in_work,
+        'pending': pending,
+        'cancelled': cancelled,
+        'new_in_period': total,
+        'removed_in_period': removed_in_period,
+        'by_status': {
             'active': active,
             'removed': removed,
             'in_work': in_work,
             'pending': pending,
-            'new_last_7_days': new_last_7_days,
-            'removed_last_7_days': removed_last_7_days,
-            'platforms': platforms_data,
-            'activity_chart': activity_chart
-        }
-        
-        # Cache for 5 minutes
+            'cancelled': cancelled,
+        },
+        'platforms': platforms_data,
+        'by_priority': priority_breakdown,
+        'activity_chart': activity_chart,
+    }
+
+
+class DashboardStatsView(APIView):
+    """
+    API view for dashboard statistics.
+
+    GET /api/stats/dashboard/?period=1d|7d|30d
+
+    Query params:
+      period: 1d, 7d, or 30d (default 30d). Stats are computed for links with detected_at in that range.
+
+    Returns:
+      period, total, active, removed, in_work, pending, by_status, platforms, by_priority, activity_chart.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        period_key, days = parse_period(request.query_params.get('period'))
+        cache_key = f'dashboard_stats_{period_key}'
+        cached_data = cache.get(cache_key)
+
+        if cached_data:
+            logger.info("Returning cached dashboard stats for period=%s", period_key)
+            return Response(cached_data)
+
+        logger.info("Calculating dashboard stats for period=%s", period_key)
+        response_data = build_dashboard_stats(period_key, days)
         cache.set(cache_key, response_data, 300)
-        
         logger.info("Dashboard stats calculated successfully")
         return Response(response_data)
+
+
+def build_platform_stats(platform, period_key, days):
+    """Build platform-specific stats for the given period."""
+    start, end = get_period_range(days)
+    base_qs = NegativeLink.objects.filter(
+        platform=platform,
+        detected_at__gte=start,
+        detected_at__lte=end,
+    )
+    by_priority = [
+        {'priority': code, 'count': base_qs.filter(priority=code).count()}
+        for code, _ in NegativeLink.PRIORITY_CHOICES
+    ]
+    return {
+        'period': period_key,
+        'platform': platform,
+        'total': base_qs.count(),
+        'active': base_qs.filter(status='active').count(),
+        'removed': base_qs.filter(status='removed').count(),
+        'in_work': base_qs.filter(status='in_work').count(),
+        'pending': base_qs.filter(status='pending').count(),
+        'cancelled': base_qs.filter(status='cancelled').count(),
+        'by_priority': by_priority,
+    }
 
 
 class PlatformStatsView(APIView):
     """
     API view for platform-specific statistics.
-    
-    GET /api/stats/platform/{platform}/
-    
-    Returns statistics for a specific platform.
+
+    GET /api/stats/platform/{platform}/?period=1d|7d|30d
+
+    Query params:
+      period: 1d, 7d, or 30d (default 30d).
     """
-    
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, platform):
-        """
-        Get statistics for a specific platform.
-        """
-        # Validate platform
         valid_platforms = [code for code, _ in NegativeLink.PLATFORM_CHOICES]
         if platform not in valid_platforms:
             return Response(
                 {'detail': f'Invalid platform. Must be one of: {", ".join(valid_platforms)}'},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
-        # Try cache first
-        cache_key = f'platform_stats_{platform}'
+
+        period_key, days = parse_period(request.query_params.get('period'))
+        cache_key = f'platform_stats_{platform}_{period_key}'
         cached_data = cache.get(cache_key)
-        
+
         if cached_data:
-            logger.info(f"Returning cached stats for platform: {platform}")
+            logger.info("Returning cached stats for platform=%s period=%s", platform, period_key)
             return Response(cached_data)
-        
-        logger.info(f"Calculating stats for platform: {platform}")
-        
-        # Calculate date range
-        seven_days_ago = timezone.now() - timedelta(days=7)
-        
-        # Platform statistics
-        platform_links = NegativeLink.objects.filter(platform=platform)
-        
-        platform_stats = {
-            'platform': platform,
-            'total': platform_links.count(),
-            'active': platform_links.filter(status='active').count(),
-            'removed': platform_links.filter(status='removed').count(),
-            'in_work': platform_links.filter(status='in_work').count(),
-            'new_last_7_days': platform_links.filter(
-                detected_at__gte=seven_days_ago
-            ).count()
-        }
-        
-        # Cache for 5 minutes
+
+        logger.info("Calculating stats for platform=%s period=%s", platform, period_key)
+        platform_stats = build_platform_stats(platform, period_key, days)
         cache.set(cache_key, platform_stats, 300)
-        
-        logger.info(f"Platform stats calculated for {platform}")
         return Response(platform_stats)

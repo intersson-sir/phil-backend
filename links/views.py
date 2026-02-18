@@ -5,6 +5,7 @@ import logging
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -40,6 +41,7 @@ class NegativeLinkViewSet(viewsets.ModelViewSet):
     
     queryset = NegativeLink.objects.all()
     serializer_class = NegativeLinkSerializer
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = NegativeLinkFilter
     search_fields = ['url']
@@ -137,19 +139,18 @@ class NegativeLinkViewSet(viewsets.ModelViewSet):
         
         POST /api/links/bulk-assign-manager/
         Body: {
-            "ids": ["uuid1", "uuid2", ...],
-            "manager": "John Doe"
+            "ids": ["link-uuid1", "link-uuid2", ...],
+            "manager_id": "manager-uuid"
         }
         """
         serializer = BulkAssignManagerSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         ids = serializer.validated_data['ids']
-        manager = serializer.validated_data['manager']
+        manager_id = serializer.validated_data['manager_id']
         
-        logger.info(f"Bulk assigning manager '{manager}' to {len(ids)} links")
+        logger.info(f"Bulk assigning manager {manager_id} to {len(ids)} links")
         
-        # Get links to update
         links = NegativeLink.objects.filter(id__in=ids)
         
         if not links.exists():
@@ -158,10 +159,9 @@ class NegativeLinkViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Update manager
-        updated_count = links.update(manager=manager)
+        updated_count = links.update(manager_id=manager_id)
         
-        logger.info(f"Assigned manager '{manager}' to {updated_count} links")
+        logger.info(f"Assigned manager {manager_id} to {updated_count} links")
         
         return Response({
             'detail': f'Successfully assigned manager to {updated_count} links.',
