@@ -20,6 +20,7 @@ class NegativeLink(models.Model):
         ('twitter', 'Twitter'),
         ('youtube', 'YouTube'),
         ('reddit', 'Reddit'),
+        ('account', 'Account'),
         ('other', 'Other'),
     ]
     
