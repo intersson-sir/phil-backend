@@ -13,6 +13,7 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from .models import NegativeLink
 from .serializers import (
     NegativeLinkSerializer,
+    NegativeLinkListSerializer,
     BulkUpdateStatusSerializer,
     BulkAssignManagerSerializer
 )
@@ -39,7 +40,7 @@ class NegativeLinkViewSet(viewsets.ModelViewSet):
     - bulk_assign_manager: POST /api/links/bulk-assign-manager/
     """
     
-    queryset = NegativeLink.objects.all()
+    queryset = NegativeLink.objects.select_related('manager')
     serializer_class = NegativeLinkSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
@@ -47,13 +48,14 @@ class NegativeLinkViewSet(viewsets.ModelViewSet):
     search_fields = ['url']
     ordering_fields = ['detected_at', 'updated_at', 'priority', 'status']
     ordering = ['-detected_at']
-    
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return NegativeLinkListSerializer
+        return NegativeLinkSerializer
+
     def get_queryset(self):
-        """
-        Optionally restricts the returned links by filtering.
-        """
-        queryset = NegativeLink.objects.all()
-        return queryset
+        return NegativeLink.objects.select_related('manager')
     
     def create(self, request, *args, **kwargs):
         """

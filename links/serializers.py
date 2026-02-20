@@ -13,6 +13,33 @@ class ManagerInlineSerializer(serializers.Serializer):
     is_active = serializers.BooleanField(read_only=True)
 
 
+class ManagerMinimalSerializer(serializers.Serializer):
+    """Ultra-light manager representation for list responses (id + name only)."""
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(read_only=True)
+
+
+class NegativeLinkListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for list view — omits notes, removed_at, created_at, updated_at.
+    Used for GET /api/links/ to reduce payload size.
+    """
+    manager = ManagerMinimalSerializer(read_only=True, allow_null=True)
+
+    class Meta:
+        model = NegativeLink
+        fields = [
+            'id',
+            'url',
+            'platform',
+            'type',
+            'status',
+            'detected_at',
+            'priority',
+            'manager',
+        ]
+
+
 class NegativeLinkSerializer(serializers.ModelSerializer):
     """
     Serializer for NegativeLink model.
