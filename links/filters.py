@@ -12,11 +12,15 @@ class NegativeLinkFilter(django_filters.FilterSet):
     Provides filtering capabilities for the API endpoints.
     """
     
-    platform = django_filters.ChoiceFilter(
-        choices=NegativeLink.PLATFORM_CHOICES,
-        field_name='platform',
-        lookup_expr='exact'
-    )
+    platform = django_filters.CharFilter(method='filter_platform')
+
+    def filter_platform(self, queryset, name, value):
+        """Filter by platform. For 'account', also include links with type=account."""
+        if value not in [code for code, _ in NegativeLink.PLATFORM_CHOICES]:
+            return queryset.none()
+        if value == 'account':
+            return queryset.filter(Q(platform='account') | Q(type='account'))
+        return queryset.filter(platform=value)
     
     status = django_filters.ChoiceFilter(
         choices=NegativeLink.STATUS_CHOICES,
